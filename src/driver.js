@@ -22,6 +22,37 @@ else {
   }
 }
 
+_.mkFuncPtrCall = function(module) {
+  var fibo = new ll.ast.Proc(
+    new ll.type.Arrow([ll.type.i32], ll.type.i32));
+  fibo.name_ = 'fiboViaPtr';
+  var fiboIx = module.procTable().indexOfProc(fibo);
+  var fiboCallable = module.procTable().indexToCallable(
+    new ll.ast.Int32Literal(fiboIx),
+    fibo.type());
+  var recurTest = new ll.ast.BinOp(ll.ast.Rator.ilt,
+                                   fibo.arg(0),
+                                   new ll.ast.Int32Literal(2));
+  var retN = ll.ast.mkReturnStmt(fibo.arg(0));
+  fibo.addStmt(ll.ast.mkIfStmt(recurTest, retN));
+
+  var nsub1 = new ll.ast.BinOp(ll.ast.Rator.isub,
+                               fibo.arg(0),
+                               new ll.ast.Int32Literal(1));
+  var res1 = new ll.ast.Call(
+    fiboCallable,
+    [nsub1]);
+  var nsub2 = new ll.ast.BinOp(ll.ast.Rator.isub,
+                               fibo.arg(0),
+                               new ll.ast.Int32Literal(2));
+  var res2 = new ll.ast.Call(
+    fiboCallable,
+    [nsub2]);
+  var res = new ll.ast.BinOp(ll.ast.Rator.iadd, res1, res2);
+  fibo.setReturn(res);
+  return fibo;
+};
+
 _.mkFiboProc = function() {
   var fibo = new ll.ast.Proc(
     new ll.type.Arrow([ll.type.i32], ll.type.i32));
@@ -77,9 +108,12 @@ _.main = function() {
 
   var module = new ll.ast.Module();
   module.setUseHeap();
-  module.addProc(_.mkFiboProc(), true);
+  var fiboProc = _.mkFiboProc();
+  var ffiProc = _.mkFFICallProc(module);
+  module.addProc(fiboProc, true);
   module.addProc(_.mkSetrefProc(), true);
-  module.addProc(_.mkFFICallProc(module), true);
+  module.addProc(ffiProc, true);
+  module.addProc(_.mkFuncPtrCall(module), true);
 
   var rawCode = module.toAsmSrc();
   _.print(rawCode);
@@ -93,10 +127,12 @@ _.main = function() {
   var fibo = linkedModule['fibo'];
   var setref = linkedModule['setref'];
   var ffiCall = linkedModule['ffiCall'];
+  var fiboViaPtr = linkedModule['fiboViaPtr'];
 
   _.bench('fibo', fibo, [30]);
   _.bench('setref', setref, [0, 123]);
   _.bench('ffiCall', ffiCall, [98765]);
+  _.bench('fiboViaPtr', fiboViaPtr, [30]);
 };
 
 _.bench = function(name, f, args) {

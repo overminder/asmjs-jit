@@ -4,6 +4,7 @@ goog.provide('asmjit.ll.ast.Rator');
 goog.require('goog.array');
 goog.require('goog.object');
 goog.require('goog.asserts');
+goog.require('goog.json');
 
 goog.require('asmjit.ll.type');
 
@@ -15,6 +16,25 @@ var ll = asmjit.ll;
 _.uniqueIdCounter_ = 0;
 _.mkUniqueId = function(prefix) {
   return prefix + '_' + String(_.uniqueIdCounter_++);
+};
+
+_.nextPowOf2 = function(n) {
+  if (n == 1) {
+    return 2;
+  }
+  var lastBit = 0, bitSum = 0;
+  for (var i = 0; i < 32 && n; ++i) {
+    var hasBit = n & 1;
+    if (hasBit) {
+      lastBit = i;
+      ++bitSum;
+    }
+    n >>= 1;
+  }
+  if (bitSum > 1) {
+    return 1 << (lastBit + 1);
+  }
+  return 1 << lastBit;
 };
 
 /**
@@ -42,10 +62,10 @@ _.Module = function() {
    */
   this.procs_ = [];
   /**
-   * @type {Object.<_.ProcTable>}
+   * @type {_.ProcTable}
    * @private
    */
-  this.tables_ = {};
+  this.procTable_ = new _.ProcTable();
   /**
    * @type {Object.<_.ProcRef>}
    * @private
@@ -81,6 +101,7 @@ _.Module.prototype.lint = function() {
   goog.array.forEach(this.procs_, function(proc) {
     proc.lint();
   });
+  this.procTable_.lint();
 };
 
 /**
@@ -114,9 +135,8 @@ _.Module.prototype.toAsmSrc = function() {
     xs.push(proc.toAsmSrc());
   });
 
-  goog.object.forEach(this.tables_, function(table) {
-    xs.push(table.toAsmSrc());
-  });
+  // XXX: proctable should just follow proc in the codegen.
+  xs.push(this.procTable_.toAsmSrc());
 
   var isFirstPair = false;
   xs.push('  return {');
@@ -143,6 +163,10 @@ _.Module.prototype.addProc = function(proc, opt_export) {
   }
 };
 
+_.Module.prototype.procTable = function() {
+  return this.procTable_;
+};
+
 _.Import = function() {
 };
 
@@ -165,6 +189,135 @@ goog.inherits(_.FFIDecl, _.Import);
 _.FFIDecl.prototype.toAsmSrc = function() {
   return 'var ' + this.ref_.name() + ' = ' +
          'foreign.' + this.ref_.name() + ';';
+};
+
+_.ProcTable = function() {
+  /**
+   * Maps tycon's repr to identifier
+   * @type {Object.<string>}
+   * @private
+   */
+  this.typeToId_ = {};
+
+  /**
+   * Maps identifiers to tables
+   * @type {Object.<Object.<_.Proc> >}
+   * @private
+   */
+  this.tables_ = {};
+
+  /**
+   * Maps identifiers to next index in the table
+   * @type {Object.<number>}
+   * @private
+   */
+  this.nextIxs_ = {};
+
+  this.dummyProcs_ = {};
+};
+
+_.ProcTable.prototype.lint = function() {
+  goog.object.forEach(this.dummyProcs_, function(proc) {
+    proc.lint();
+  });
+
+  // Nothing much..
+};
+
+/**
+ * Lazily fills table up if size is not power of 2
+ */
+_.ProcTable.prototype.toAsmSrc = function() {
+  var xs = [];
+
+  goog.object.forEach(this.dummyProcs_, function(proc) {
+    xs.push(proc.toAsmSrc());
+  });
+
+  goog.object.forEach(this.tables_, function(table, ident) {
+    xs.push('var ' + ident + ' = [');
+
+    var procArray = new Array(_.nextPowOf2(this.nextIxs_[ident]));
+    goog.object.forEach(table, function(ix, procName) {
+      procArray[ix] = procName;
+    });
+
+    var dummyProcName = this.dummyProcs_[ident].name();
+
+    for (var i = 0; i < procArray.length; ++i) {
+      var procName = procArray[i];
+      if (!procName) {
+        procName = dummyProcName;
+      }
+      if (i) {
+        xs.push(', ');
+      }
+      xs.push(procName);
+    }
+
+    xs.push('];');
+  }, this);
+  return xs.join('\n');
+};
+
+_.ProcTable.prototype.typeToIdent = function(type) {
+  var ident = this.typeToId_[type.toString()];
+  if (!ident) {
+    this.typeToId_[type.toString()] = ident =
+      _.mkUniqueId('funcPtrTable');
+  }
+  return ident;
+};
+
+_.ProcTable.prototype.insertDummyProc = function(type, table) {
+  var proc = new _.Proc(type);
+  table[proc.name()] = 0;
+
+  // Saves for later use
+  this.dummyProcs_[this.typeToIdent(type)] = proc;
+};
+
+_.ProcTable.prototype.typeToTable = function(type) {
+  var ident = this.typeToIdent(type);
+  var table = this.tables_[ident];
+  if (!table) {
+    this.tables_[ident] = table = {};
+    this.nextIxs_[ident] = 1;
+    // Insert a dummy function to the table, so as to keep
+    // funcptr `0` unmapped
+    this.insertDummyProc(type, table);
+  }
+  return table;
+};
+
+/**
+ * Table size correction is done in the codegen phase.
+ */
+_.ProcTable.prototype.typeToMask = function(type) {
+  var ident = this.typeToIdent(type);
+  var size = this.nextIxs_[ident];
+  var toSize = _.nextPowOf2(size);
+  return toSize - 1;
+};
+
+_.ProcTable.prototype.nextIxOfIdent = function(ident) {
+  var nextIx = this.nextIxs_[ident];
+  this.nextIxs_[ident] = nextIx + 1;
+  return nextIx;
+};
+
+_.ProcTable.prototype.indexOfProc = function(proc) {
+  var table = this.typeToTable(proc.type());
+  var ix = table[proc.name()];
+  if (!ix) {
+    var ident = this.typeToIdent(proc.type());
+    table[proc.name()] = ix = this.nextIxOfIdent(ident);
+  }
+  return ix;
+};
+
+_.ProcTable.prototype.indexToCallable = function(expr, type) {
+  return new _.IndirectCallable(type, expr, this);
 };
 
 /**
@@ -534,6 +687,7 @@ _.Call.prototype.toAsmSrc = function() {
 };
 
 _.Call.prototype.lint = function() {
+  this.func_.lint();
   var funcType = this.func_.type();
   goog.asserts.assert(this.type_ === funcType.resType());
   goog.array.forEach(this.args_, function(arg, i) {
@@ -561,6 +715,10 @@ _.ProcRef.prototype.toAsmSrc = function() {
   return this.proc_.name();
 };
 
+_.ProcRef.prototype.lint = function() {
+  goog.asserts.assert(this.proc_.type() === this.type_);
+};
+
 /**
  * @constructor
  */
@@ -573,6 +731,27 @@ goog.inherits(_.ForeignRef, _.Callable);
 _.ForeignRef.prototype.name = function() { return this.name_; };
 _.ForeignRef.prototype.toAsmSrc = function() {
   return this.name_;
+};
+
+_.ForeignRef.prototype.lint = function() {
+};
+
+_.IndirectCallable = function(type, expr, procTable) {
+  this.expr_ = expr;
+  this.type_ = type;
+  this.procTable_ = procTable;
+};
+goog.inherits(_.IndirectCallable, _.Callable);
+
+_.IndirectCallable.prototype.lint = function() {
+  this.expr_.assertType(ll.type.i32);
+};
+
+_.IndirectCallable.prototype.toAsmSrc = function() {
+  var tableName = this.procTable_.typeToIdent(this.type_);
+  var mask = this.procTable_.typeToMask(this.type_);
+  return tableName + '[' + '(' + this.expr_.toAsmSrc() + ')' +
+         ' & ' + String(mask) + ']';
 };
 
 /**
