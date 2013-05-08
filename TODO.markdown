@@ -6,3 +6,6 @@
 - Automatic pointer management
 - Automatic function pointer management
 - Support for tail recursion (to loop) and tail call elim (by trampol)?
+
+- Don't insert |0 in chrome since v8's i32 narrowing is currently broken (and
+  just fixed in the upstream but appearently not applied to node and chrome 26)

@@ -9,7 +9,7 @@ goog.scope(function() {
 var _ = asmjit.driver;
 var ll = asmjit.ll;
 
-if (goog.userAgent.GECKO || goog.userAgent.WEBKIT) {
+if (typeof console !== 'undefined') {
   _.print = function(x) {
     console.log(x);
   };
@@ -20,34 +20,54 @@ else {
   }
 }
 
+_.mkFiboProc = function() {
+  var fibo = new ll.ast.Proc(
+    new ll.type.Arrow([ll.type.i32], ll.type.i32));
+  var recurTest = new ll.ast.BinOp(ll.ast.Rator.ilt,
+                                   fibo.arg(0),
+                                   new ll.ast.Int32Literal(2));
+  var retN = ll.ast.mkReturnStmt(fibo.arg(0));
+  fibo.addStmt(ll.ast.mkIfStmt(recurTest, retN));
+
+  var nsub1 = new ll.ast.BinOp(ll.ast.Rator.isub,
+                               fibo.arg(0),
+                               new ll.ast.Int32Literal(1));
+  var res1 = new ll.ast.Call(fibo.toCallable(), [nsub1]);
+  var nsub2 = new ll.ast.BinOp(ll.ast.Rator.isub,
+                               fibo.arg(0),
+                               new ll.ast.Int32Literal(2));
+  var res2 = new ll.ast.Call(fibo.toCallable(), [nsub2]);
+  var res = new ll.ast.BinOp(ll.ast.Rator.iadd, res1, res2);
+  fibo.setReturn(res);
+  return fibo;
+};
+
 _.main = function() {
-  var i32AddType = new ll.type.Arrow(
-    [ll.type.i32, ll.type.i32], ll.type.i32);
-  _.print(i32AddType);
+  "use strict";
 
-  var addProc = new ll.ast.Proc(i32AddType);
-  addProc.setReturn(new ll.ast.AddExpr(addProc.arg(0),
-                                       addProc.arg(1)));
-
-  var addOne = new ll.ast.Proc(new ll.type.Arrow(
-    [ll.type.i32], ll.type.i32));
-  var t0 = addOne.mkVar(ll.type.i32)
-  var t1 = addOne.mkVar(ll.type.i32);
-  addOne.setReturn(new ll.ast.Call(addProc.toCallable(),
-                                   [ addOne.arg(0)
-                                   , new ll.ast.Int32Literal(1)
-                                   ]));
+  var fiboProc = _.mkFiboProc();
 
   var module = new ll.ast.Module();
-  module.addProc(addProc);
-  module.addProc(addOne, true);
+  module.addProc(fiboProc, true);
 
   var rawCode = module.toAsmSrc();
   _.print(rawCode);
 
   // try to compile
-  var compiledModule = new Function(rawCode)();
-  print(compiledModule[addOne.name()](41));
+  var compiledModule = eval(rawCode);
+
+  var fibo = compiledModule[fiboProc.name()];
+
+  _.bench('fibo', fibo, [30]);
+};
+
+_.bench = function(name, f, args) {
+  var d0 = new Date().getTime();
+  var res = f(args);
+  var dt = new Date().getTime() - d0;
+
+  _.print(name + ' => ' + String(res) + ' used ' +
+          String(dt) + 'ms');
 };
 
 goog.exportSymbol('asmjit.driver.main', _.main);
