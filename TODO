@@ -1,0 +1,8 @@
+### As a jit library
+
+- Should be easier to use than directly targeting asm.js
+- This includes: strong typing, type inference and explicit casting
+- Automatic local and global variable management
+- Automatic pointer management
+- Automatic function pointer management
+- Support for tail recursion (to loop) and tail call elim (by trampol)?
