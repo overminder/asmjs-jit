@@ -1,0 +1,2 @@
+#!/bin/bash
+gdb --args ionmonkey --file=asmjit-c.js --execute="asmjit.driver.main()" $@

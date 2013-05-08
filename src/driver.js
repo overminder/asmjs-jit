@@ -129,7 +129,7 @@ _.main = function() {
   var ffiCall = linkedModule['ffiCall'];
   var fiboViaPtr = linkedModule['fiboViaPtr'];
 
-  _.bench('fibo', fibo, [30]);
+  _.bench('fibo', fibo, [40]);
   _.bench('setref', setref, [0, 123]);
   _.bench('ffiCall', ffiCall, [98765]);
   _.bench('fiboViaPtr', fiboViaPtr, [30]);
