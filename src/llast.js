@@ -4,7 +4,6 @@ goog.provide('asmjit.ll.ast.Rator');
 goog.require('goog.array');
 goog.require('goog.object');
 goog.require('goog.asserts');
-goog.require('goog.json');
 
 goog.require('asmjit.ll.type');
 
@@ -42,7 +41,7 @@ _.nextPowOf2 = function(n) {
  */
 _.Module = function() {
   /**
-   * Global (actually is module-local) varaibles
+   * Global (actually is module-local) variables
    * @type {Array.<_.Var>}
    * @private
    */
@@ -54,6 +53,9 @@ _.Module = function() {
    */
   this.imports_ = [];
 
+  /**
+   * @type {Object.<function>}
+   */
   this.prelinkedFuncs_ = {};
 
   /**

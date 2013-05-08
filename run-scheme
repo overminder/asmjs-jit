@@ -1,0 +1,2 @@
+#!/bin/bash
+ionmonkey --file=scheme-c.js --execute="lang.scheme.main()" $@
