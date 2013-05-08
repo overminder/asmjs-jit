@@ -60,6 +60,18 @@ _.mkSetrefProc = function() {
   return proc;
 };
 
+_.mkFFICallProc = function(module) {
+  var proc = new ll.ast.Proc(
+    new ll.type.Arrow([ll.type.i32], ll.type.i32));
+  proc.name_ = 'ffiCall';
+
+  var ffiPrint = module.foreignImport(_.print,
+    new ll.type.Arrow([ll.type.i32], ll.type.i32));
+
+  proc.setReturn(new ll.ast.Call(ffiPrint, [proc.arg(0)]));
+  return proc;
+};
+
 _.main = function() {
   "use strict";
 
@@ -67,21 +79,24 @@ _.main = function() {
   module.setUseHeap();
   module.addProc(_.mkFiboProc(), true);
   module.addProc(_.mkSetrefProc(), true);
+  module.addProc(_.mkFFICallProc(module), true);
 
   var rawCode = module.toAsmSrc();
   _.print(rawCode);
 
   // try to compile
-  var compiledModule = eval(rawCode);
+  var compiledModule = module.compile();
   var buffer = new ArrayBuffer(4096);
   var linkedModule = compiledModule(
-    _.globalObject, {}, buffer);
+    _.globalObject, buffer);
 
   var fibo = linkedModule['fibo'];
   var setref = linkedModule['setref'];
+  var ffiCall = linkedModule['ffiCall'];
 
   _.bench('fibo', fibo, [30]);
   _.bench('setref', setref, [0, 123]);
+  _.bench('ffiCall', ffiCall, [98765]);
 };
 
 _.bench = function(name, f, args) {

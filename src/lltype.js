@@ -139,6 +139,9 @@ _.Ptr = function(type) {
 };
 goog.inherits(_.Ptr, _.Int);
 
+/**
+ * Get its name for the typed heap view
+ */
 _.Ptr.prototype.heapBase = function() {
   return 'heapBaseAs' + this.tyArgAt(0).toString();
 };
