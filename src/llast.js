@@ -1,4 +1,5 @@
 goog.provide('asmjit.ll.ast');
+goog.provide('asmjit.ll.ast.Rator');
 
 goog.require('goog.array');
 goog.require('goog.object');
@@ -21,71 +22,106 @@ _.mkUniqueId = function(prefix) {
  */
 _.Module = function() {
   /**
-   * @type {Object.<_.Var>}
+   * Global (actually is module-local) varaibles
+   * @type {Array.<_.Var>}
    * @private
    */
-  this.vars_ = {};
+  this.vars_ = [];
+
   /**
-   * @type {Object.<_.Proc>}
+   * Foreign imports
+   * @type {Array.<_.Import>}
+   */
+  this.imports_ = [];
+
+  /**
+   * @type {Array.<_.Proc>}
    * @private
    */
-  this.procs_ = {};
+  this.procs_ = [];
   /**
    * @type {Object.<_.ProcTable>}
    * @private
    */
   this.tables_ = {};
   /**
-   * @type {Object.<_.Var>}
+   * @type {Object.<_.ProcRef>}
    * @private
    */
   this.exports_ = {};
 };
 
+_.Module.prototype.setUseHeap = function() {
+  goog.array.forEach([ll.type.i32p, ll.type.i16p, ll.type.i8p,
+                      ll.type.u32p, ll.type.u16p, ll.type.u8p],
+    function(ptrTy) {
+      this.imports_.push(new _.HeapDecl(ptrTy));
+    }, this);
+};
+
 _.Module.prototype.compile = function() {
-  return new Function(this.toAsmSrc())();
+  return eval(this.toAsmSrc());
 };
 
 _.Module.prototype.toAsmSrc = function() {
-  var xs = [ '(function() {'
+  var xs = [ '(function(stdlib, foreign, heap) {'
            , '  "use asm";'
            ];
 
-  goog.object.forEach(this.vars_, function(val) {
-    xs.push(val.toAsmSrc());
+  goog.array.forEach(this.imports_, function(x) {
+    xs.push(x.toAsmSrc());
   });
 
-  goog.object.forEach(this.procs_, function(val) {
-    xs.push(val.toAsmSrc());
+  goog.array.forEach(this.vars_, function(v) {
+    xs.push('var ' + v.name() + ' = ' +
+            v.type().defaultVal() + ';');
   });
 
-  goog.object.forEach(this.tables_, function(val) {
-    xs.push(val.toAsmSrc());
+  goog.array.forEach(this.procs_, function(proc) {
+    xs.push(proc.toAsmSrc());
+  });
+
+  goog.object.forEach(this.tables_, function(table) {
+    xs.push(table.toAsmSrc());
   });
 
   var isFirstPair = false;
   xs.push('  return {');
-  goog.object.forEach(this.exports_, function(val, key) {
+  goog.object.forEach(this.exports_, function(ref, asName) {
     if (!isFirstPair) {
       isFirstPair = true;
     }
     else {
       xs.push(', ');
     }
-    xs.push(key, ': ', val.name());
+    xs.push(asName, ': ', ref.toAsmSrc());
   });
   xs.push( '  };'
-         , '})()'
+         , '})'
          );
 
   return xs.join('\n');
 };
 
 _.Module.prototype.addProc = function(proc, opt_export) {
-  this.procs_[proc.name()] = proc;
+  this.procs_.push(proc);
   if (opt_export) {
-    this.exports_[proc.name()] = proc;
+    this.exports_[proc.name()] = proc.toCallable();
   }
+};
+
+_.Import = function() {
+};
+
+_.HeapDecl = function(ptrType) {
+  this.ptrType_ = ptrType;
+};
+goog.inherits(_.HeapDecl, _.Import);
+
+_.HeapDecl.prototype.toAsmSrc = function() {
+  var valType = this.ptrType_.tyArgAt(0);
+  return 'var ' + this.ptrType_.heapBase() + ' = ' +
+         'new stdlib.' + valType.toString() + 'Array(heap);';
 };
 
 /**
@@ -215,28 +251,41 @@ _.BinOp = function(op, lhs, rhs, opt_resType) {
 
   var lType = lhs.type();
   var rType = rhs.type();
-  // Guess type
-  if (opt_resType) {
+
+  // Figure out the type
+  var type = op.guessType(lhs, rhs);
+  if (type) {
+    if (opt_resType) {
+      goog.asserts.assert(type === opt_resType);
+    }
+    this.type_ = type;
+  }
+  else if (opt_resType) {
     this.type_ = opt_resType;
   }
-  else if (lType === rType && lType === ll.type.i32) {
-    this.type_ = ll.type.i32;
-  }
   else {
-    throw Error('Cannot guess type', op, lhs, rhs);
+    throw Error('cannot guess type', this, lhs, rhs);
   }
 };
 goog.inherits(_.BinOp, _.Expr);
 
 _.BinOp.prototype.toAsmSrc = function() {
+  var repr;
   if (this.op_.infix()) {
-    return this.type_.annotate('(' + this.lhs_.toAsmSrc() +
-                               this.op_.toAsmSrc() +
-                               this.rhs_.toAsmSrc() + ')');
+    repr = this.lhs_.toAsmSrc() + this.op_.toAsmSrc() +
+           this.rhs_.toAsmSrc();
   }
   else {
-    throw Error('not implemented');
+    repr = this.op_.toAsmSrc(this.lhs_, this.rhs_);
   }
+  return this.type_.annotate('(' + repr + ')');
+};
+
+_.BinOp.prototype.asLocation = function() {
+  if (this.op_ instanceof _.Deref) {
+    return this.op_.asLocation(this.lhs_, this.rhs_);
+  }
+  throw Error('Not a location expr');
 };
 
 _.Rator = function() {
@@ -246,29 +295,81 @@ _.Rator.prototype.infix = function() {
   return false;
 };
 
-_.InfixRator = function(name) {
+_.ArithRator = function(name) {
   this.name_ = name;
 };
-goog.inherits(_.InfixRator, _.Rator);
+goog.inherits(_.ArithRator, _.Rator);
 
-_.InfixRator.prototype.toAsmSrc = function() {
+_.ArithRator.prototype.toAsmSrc = function() {
   return this.name_;
 };
 
-_.InfixRator.prototype.infix = function() {
+_.ArithRator.prototype.infix = function() {
   return true;
 };
 
-_.Rator.iadd = new _.InfixRator('+');
-_.Rator.isub = new _.InfixRator('-');
-_.Rator.imul = new _.InfixRator('*');
-_.Rator.idiv = new _.InfixRator('/');
-_.Rator.ilt = new _.InfixRator('<');
-_.Rator.ile = new _.InfixRator('<=');
-_.Rator.ieq = new _.InfixRator('==');
-_.Rator.ine = new _.InfixRator('!=');
-_.Rator.igt = new _.InfixRator('>');
-_.Rator.ige = new _.InfixRator('>=');
+_.ArithRator.prototype.guessType = function(lhs, rhs) {
+  if (lhs.type() === rhs.type() &&
+      lhs.type() === ll.type.i32) {
+    return ll.type.i32;
+  }
+  else {
+    return null;
+  }
+};
+
+_.Rator.iadd = new _.ArithRator('+');
+_.Rator.isub = new _.ArithRator('-');
+_.Rator.imul = new _.ArithRator('*');
+_.Rator.idiv = new _.ArithRator('/');
+_.Rator.ilt = new _.ArithRator('<');
+_.Rator.ile = new _.ArithRator('<=');
+_.Rator.ieq = new _.ArithRator('==');
+_.Rator.ine = new _.ArithRator('!=');
+_.Rator.igt = new _.ArithRator('>');
+_.Rator.ige = new _.ArithRator('>=');
+
+_.Deref = function() {
+};
+goog.inherits(_.Deref, _.Rator);
+
+_.Deref.prototype.infix = function() {
+  return false;
+};
+
+_.Deref.prototype.guessType = function(base, offset) {
+  ptrType = base.type();
+  goog.asserts.assert(ptrType instanceof ll.type.Ptr);
+  var valType = ptrType.tyArgAt(0);
+  goog.asserts.assert(valType instanceof ll.type.Int);
+
+  var ixType = offset.type();
+  goog.asserts.assert(ixType instanceof ll.type.Int);
+
+  return valType;
+};
+
+_.Deref.prototype.toAsmSrc = function(base, offset) {
+  var ptrType = base.type();
+  var valType = ptrType.tyArgAt(0);
+  var shift = String(valType.shift());
+
+  var shiftedOffset = '((' + offset.toAsmSrc() + ' << ' +
+                      shift + ') | 0)';
+  var combinedBase = '((' + base.toAsmSrc() + ' + ' +
+                     shiftedOffset + ') | 0)';
+
+  var shiftBack = combinedBase + ' >> ' + shift;
+  var repr = '[' + shiftBack + ']';
+  return ptrType.heapBase() + repr;
+};
+
+_.Deref.prototype.asLocation = function(base, offset) {
+  return this.toAsmSrc(base, offset);
+};
+
+_.Rator.deref = new _.Deref();
+
 
 /**
  * @constructor
@@ -305,6 +406,20 @@ _.Var.prototype.toAsmSrc = function() {
 };
 
 _.Var.prototype.name = function() { return this.name_; }
+
+_.Var.prototype.asLocation = function() {
+  return this.name();
+};
+
+_.Cast = function(type, expr) {
+  this.type_ = type;
+  this.expr_ = expr;
+};
+goog.inherits(_.Cast, _.Expr);
+
+_.Cast.prototype.toAsmSrc = function() {
+  return this.type_.annotate(this.expr_.toAsmSrc());
+};
 
 /**
  * @constructor
@@ -474,13 +589,17 @@ _.ExprStmt.prototype.toAsmSrc = function() {
 };
 
 _.AssignStmt = function(lhs, rhs) {
+  /**
+   * @type {_.Var|_.BinOp}
+   */
   this.lhs_ = lhs;
   this.rhs_ = rhs;
 };
 goog.inherits(_.AssignStmt, _.Stmt);
 
 _.AssignStmt.prototype.toAsmSrc = function() {
-  return this.lhs_.name() + ' = ' + this.rhs_.toAsmSrc();
+  return this.lhs_.asLocation() + ' = ' +
+         this.rhs_.toAsmSrc() + ';';
 };
 
 });  // !goog.scope

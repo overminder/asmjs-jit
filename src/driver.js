@@ -4,6 +4,8 @@ goog.require('goog.userAgent');
 goog.require('asmjit.ll.ast');
 goog.require('asmjit.ll.type');
 
+asmjit.driver.globalObject = this;
+
 goog.scope(function() {
 
 var _ = asmjit.driver;
@@ -23,6 +25,7 @@ else {
 _.mkFiboProc = function() {
   var fibo = new ll.ast.Proc(
     new ll.type.Arrow([ll.type.i32], ll.type.i32));
+  fibo.name_ = 'fibo';
   var recurTest = new ll.ast.BinOp(ll.ast.Rator.ilt,
                                    fibo.arg(0),
                                    new ll.ast.Int32Literal(2));
@@ -42,28 +45,48 @@ _.mkFiboProc = function() {
   return fibo;
 };
 
+_.mkSetrefProc = function() {
+  var proc = new ll.ast.Proc(
+    new ll.type.Arrow([ll.type.i32, ll.type.i32], ll.type.i32));
+  proc.name_ = 'setref';
+  proc.addStmt(new ll.ast.AssignStmt(
+    new ll.ast.BinOp(ll.ast.Rator.deref,
+      new ll.ast.Cast(ll.type.i32p, proc.arg(0)),
+      new ll.ast.Int32Literal(0)), proc.arg(1)));
+  proc.setReturn(
+    new ll.ast.BinOp(ll.ast.Rator.deref,
+      new ll.ast.Cast(ll.type.i32p, proc.arg(0)),
+      new ll.ast.Int32Literal(0)));
+  return proc;
+};
+
 _.main = function() {
   "use strict";
 
-  var fiboProc = _.mkFiboProc();
-
   var module = new ll.ast.Module();
-  module.addProc(fiboProc, true);
+  module.setUseHeap();
+  module.addProc(_.mkFiboProc(), true);
+  module.addProc(_.mkSetrefProc(), true);
 
   var rawCode = module.toAsmSrc();
   _.print(rawCode);
 
   // try to compile
   var compiledModule = eval(rawCode);
+  var buffer = new ArrayBuffer(4096);
+  var linkedModule = compiledModule(
+    _.globalObject, {}, buffer);
 
-  var fibo = compiledModule[fiboProc.name()];
+  var fibo = linkedModule['fibo'];
+  var setref = linkedModule['setref'];
 
   _.bench('fibo', fibo, [30]);
+  _.bench('setref', setref, [0, 123]);
 };
 
 _.bench = function(name, f, args) {
   var d0 = new Date().getTime();
-  var res = f(args);
+  var res = f.apply(null, args);
   var dt = new Date().getTime() - d0;
 
   _.print(name + ' => ' + String(res) + ' used ' +

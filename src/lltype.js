@@ -1,6 +1,7 @@
 goog.provide('asmjit.ll.type');
 
 goog.require('goog.array');
+goog.require('goog.asserts');
 
 goog.scope(function() {
 
@@ -12,6 +13,10 @@ var _ = asmjit.ll.type;
 _.TyCon = function(name, tyArgs) {
   this.name_ = name;
   this.tyArgs_ = tyArgs;
+};
+
+_.TyCon.prototype.tyArgAt = function(i) {
+  return this.tyArgs_[i];
 };
 
 _.TyCon.prototype.needsParenWrap_ = function() {
@@ -93,17 +98,49 @@ _.TupleN.prototype.toString = function() {
 /**
  * @constructor
  */
-_.Int32 = function() {
-  goog.base(this, 'Int32', []);
-};
-goog.inherits(_.Int32, _.TyCon);
+_.Int = function(width, signed) {
+  goog.asserts.assert(width == 1 ||
+                      width == 2 ||
+                      width == 4, 'wrong width');
+  goog.base(this, (signed ? 'Int' : 'Uint') +
+                  String(width * 8), []);
 
-_.Int32.prototype.annotate = function(exprRepr) {
+  this.width_ = width;
+};
+goog.inherits(_.Int, _.TyCon);
+
+_.Int.prototype.width = function() { return this.width_; };
+
+_.Int.prototype.shift = function() {
+  switch (this.width_) {
+  case 1:
+    return 0;
+  case 2:
+    return 1;
+  case 4:
+    return 2;
+  }
+};
+
+_.Int.prototype.annotate = function(exprRepr) {
   return '(' + exprRepr + ' | 0)';
 };
 
-_.Int32.prototype.defaultVal = function() {
+_.Int.prototype.defaultVal = function() {
   return '0';
+};
+
+/**
+ * Reuse Int32's methods
+ * @constructor
+ */
+_.Ptr = function(type) {
+  _.TyCon.call(this, 'Ptr', [type]);
+};
+goog.inherits(_.Ptr, _.Int);
+
+_.Ptr.prototype.heapBase = function() {
+  return 'heapBaseAs' + this.tyArgAt(0).toString();
 };
 
 /**
@@ -114,8 +151,15 @@ _.Void = function() {
 };
 goog.inherits(_.Void, _.TyCon);
 
-_.i32 = new _.Int32();
 _.woid = new _.Void();
+_.i32  = new _.Int(4, true);
+_.u32  = new _.Int(4, false);
+_.i32p = new _.Ptr(_.i32);
+_.i16p = new _.Ptr(new _.Int(2, true));
+_.i8p  = new _.Ptr(new _.Int(1, true));
+_.u32p = new _.Ptr(_.u32);
+_.u16p = new _.Ptr(new _.Int(2, false));
+_.u8p  = new _.Ptr(new _.Int(1, false));
 
 });  // !goog.scope
 
